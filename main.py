@@ -22,7 +22,7 @@ with open('coco.names', 'rt') as f:
 # متغير الكاميرا
 cam = None
 
-# وظيفة فتح الكاميرا بشكل آمن
+# وظيفة فتح الكاميرا
 def open_camera():
     global cam
     cam = cv2.VideoCapture(0)
@@ -32,8 +32,8 @@ def open_camera():
 
     if not cam.isOpened():
         print("❌ فشل في فتح الكاميرا")
-        return False
-    return True
+        cam = None  # تعيين الكاميرا إلى None في حالة الفشل
+        return
 
 # تشغيل الكاميرا في Thread مستقل
 camera_thread = threading.Thread(target=open_camera)
@@ -42,8 +42,8 @@ camera_thread.start()
 # وظيفة بث الفيديو
 def generate_frames():
     global cam
-    if cam is None:
-        return
+    while cam is None:  # انتظر حتى يتم فتح الكاميرا
+        pass
 
     while True:
         success, frame = cam.read()
@@ -54,20 +54,22 @@ def generate_frames():
         # تشغيل نموذج الكشف عن الكائنات
         class_ids, confs, bbox = net.detect(frame, confThreshold=0.5)
 
-        if len(class_ids) != 0:
+        if class_ids is not None and len(class_ids) > 0:
             for class_id, confidence, box in zip(class_ids.flatten(), confs.flatten(), bbox):
-                label = class_names[class_id - 1]
-                cv2.rectangle(frame, box, color=(0, 255, 0), thickness=2)
-                cv2.putText(frame, label, (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                if 0 <= class_id - 1 < len(class_names):
+                    label = class_names[class_id - 1]
+                    cv2.rectangle(frame, box, color=(0, 255, 0), thickness=2)
+                    cv2.putText(frame, label, (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         # تحويل الصورة إلى JPEG
         ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            continue
+
         frame = buffer.tobytes()
 
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-    cam.release()
 
 # تشغيل الفيديو في المتصفح
 @app.route('/video_feed')
