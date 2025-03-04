@@ -2,8 +2,7 @@ from flask import Flask, Response
 from flask_cors import CORS
 import cv2
 import numpy as np
-import threading
-import time
+import os
 
 # تهيئة تطبيق Flask
 app = Flask(__name__)
@@ -20,15 +19,14 @@ net.setInputSwapRB(True)
 with open('coco.names', 'rt') as f:
     class_names = f.read().rstrip('\n').split('\n')
 
-# وظيفة بث الفيديو
+# مصدر الفيديو (ملف فيديو أو كاميرا IP)
+VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "video.mp4")  # ضع رابط بث إذا كنت تستخدم كاميرا IP
+
 def generate_frames():
-    cam = cv2.VideoCapture(0)  # فتح الكاميرا
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # ضبط العرض
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # ضبط الارتفاع
-    cam.set(cv2.CAP_PROP_FPS, 30)            # ضبط معدل الإطارات
+    cam = cv2.VideoCapture(VIDEO_SOURCE)  # استخدام ملف فيديو أو كاميرا IP
 
     if not cam.isOpened():
-        print("❌ فشل في فتح الكاميرا")
+        print("❌ فشل في فتح المصدر:", VIDEO_SOURCE)
         return
 
     while True:
@@ -37,22 +35,14 @@ def generate_frames():
             print("❌ فشل في قراءة الإطار")
             break
 
-        # تحويل الألوان من BGR إلى RGB لمنع التشوه
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
         # تشغيل نموذج الكشف عن الكائنات
         class_ids, confs, bbox = net.detect(frame, confThreshold=0.5)
 
         if len(class_ids) != 0:
             for class_id, confidence, box in zip(class_ids.flatten(), confs.flatten(), bbox):
                 label = class_names[class_id - 1]
-
-                # رسم المستطيلات على الأجسام المكتشفة
                 cv2.rectangle(frame, box, color=(0, 255, 0), thickness=2)
                 cv2.putText(frame, label, (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-        # إعادة ضبط حجم الصورة
-        frame = cv2.resize(frame, (640, 480))
 
         # تحويل الصورة إلى JPEG لإرسالها إلى المتصفح
         ret, buffer = cv2.imencode('.jpg', frame)
@@ -63,10 +53,10 @@ def generate_frames():
 
     cam.release()
 
-# تشغيل الفيديو في المتصفح
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    port = int(os.environ.get("PORT", 5000))  # استخدم المنفذ الذي يحدده Railway
+    app.run(host="0.0.0.0", port=port)
