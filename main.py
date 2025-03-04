@@ -1,62 +1,69 @@
 from flask import Flask, Response
 from flask_cors import CORS
 import cv2
-import numpy as np
 import os
+import time
 
 # تهيئة تطبيق Flask
 app = Flask(__name__)
 CORS(app)
 
-# تحميل نموذج الذكاء الاصطناعي للكشف عن الأجسام
-net = cv2.dnn_DetectionModel('frozen_inference_graph.pb', 'ssd_mobilenet_v3_large_coco_2020_01_14.pbtxt')
-net.setInputSize(320, 230)
-net.setInputScale(1.0 / 127.5)
-net.setInputMean((127.5, 127.5, 127.5))
-net.setInputSwapRB(True)
+# استخدم عنوان كاميرا الشبكة أو ملف فيديو
+CAMERA_URL = os.getenv("CAMERA_URL", "video.mp4")  # يمكن تعيين URL عبر المتغيرات البيئية
 
-# تحميل أسماء الأجسام من ملف coco.names
-with open('coco.names', 'rt') as f:
-    class_names = f.read().rstrip('\n').split('\n')
+# فتح اتصال الفيديو (من كاميرا IP أو ملف فيديو)
+cam = cv2.VideoCapture(CAMERA_URL)
 
-# مصدر الفيديو (ملف فيديو أو كاميرا IP)
-VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "video.mp4")  # ضع رابط بث إذا كنت تستخدم كاميرا IP
+# التأكد من نجاح الاتصال
+if not cam.isOpened():
+    print("❌ فشل في الاتصال بالفيديو، تأكد من الرابط أو الملف!")
+else:
+    print("✅ الاتصال بالفيديو ناجح!")
 
+# بث الفيديو
 def generate_frames():
-    cam = cv2.VideoCapture(VIDEO_SOURCE)  # استخدام ملف فيديو أو كاميرا IP
+    global cam
+    fps_limit = 10  # تحديد معدل الإطارات
+    delay = 1 / fps_limit
 
-    if not cam.isOpened():
-        print("❌ فشل في فتح المصدر:", VIDEO_SOURCE)
-        return
+    try:
+        while True:
+            start_time = time.time()
+            success, frame = cam.read()
+            if not success:
+                print("❌ فشل في قراءة الإطار، ربما انتهى الفيديو؟")
+                break
 
-    while True:
-        success, frame = cam.read()
-        if not success:
-            print("❌ فشل في قراءة الإطار")
-            break
+            # تحويل الصورة إلى JPEG
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
 
-        # تشغيل نموذج الكشف عن الكائنات
-        class_ids, confs, bbox = net.detect(frame, confThreshold=0.5)
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-        if len(class_ids) != 0:
-            for class_id, confidence, box in zip(class_ids.flatten(), confs.flatten(), bbox):
-                label = class_names[class_id - 1]
-                cv2.rectangle(frame, box, color=(0, 255, 0), thickness=2)
-                cv2.putText(frame, label, (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            elapsed_time = time.time() - start_time
+            if elapsed_time < delay:
+                time.sleep(delay - elapsed_time)
+    finally:
+        cam.release()
 
-        # تحويل الصورة إلى JPEG لإرسالها إلى المتصفح
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame = buffer.tobytes()
-
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-    cam.release()
-
+# تشغيل الفيديو في المتصفح
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+# تغيير مصدر الفيديو ديناميكيًا
+@app.route('/set_source/<source>')
+def set_source(source):
+    global cam, CAMERA_URL
+    CAMERA_URL = source
+    cam.release()
+    cam = cv2.VideoCapture(CAMERA_URL)
+    if not cam.isOpened():
+        return f"❌ فشل في الاتصال بمصدر الفيديو: {source}", 500
+    else:
+        return f"✅ تم تغيير مصدر الفيديو إلى: {source}"
+
+# تشغيل التطبيق
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # استخدم المنفذ الذي يحدده Railway
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
